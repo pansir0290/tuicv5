@@ -5,45 +5,55 @@ GREEN='\033[0;32m'
 RED='\033[0;31m'
 NC='\033[0m'
 
-echo -e "${GREEN}=== TUIC v5 一键部署脚本 ===${NC}"
+echo -e "${GREEN}=== TUIC v5 智能部署脚本 ===${NC}"
 
-# 1. 自动探测或手动输入域名
+# 1. 自动探测域名 (Reality 配置文件或系统名)
 DOMAIN=$(grep -r "serverNames" /usr/local/etc/xray/ 2>/dev/null | grep -oP '(?<=")[^"]+(?=")' | head -n 1)
 if [ -z "$DOMAIN" ]; then
-    read -p "未检测到 Reality 域名，请输入你的伪装域名: " DOMAIN
+    read -p "未自动发现伪装域名，请输入你的域名: " DOMAIN
 fi
 
-# 2. 自动探测或手动输入证书路径
-CERT_PATH=$(find /etc/letsencrypt/live/ -name fullchain.pem 2>/dev/null | head -n 1)
-KEY_PATH=$(find /etc/letsencrypt/live/ -name privkey.pem 2>/dev/null | head -n 1)
+# 2. 智能搜索证书
+echo "正在扫描系统中的证书..."
+# 优先搜索 NPM 路径，其次搜索全盘
+CERT_PATH=$(find /root/npm/letsencrypt/live/ -name fullchain.pem 2>/dev/null | head -n 1)
+KEY_PATH=$(find /root/npm/letsencrypt/live/ -name privkey.pem 2>/dev/null | head -n 1)
 
 if [ -z "$CERT_PATH" ]; then
-    echo -e "${RED}未自动发现证书！${NC}"
-    read -p "请输入 Fullchain.pem 绝对路径: " CERT_PATH
-    read -p "请输入 Privkey.pem 绝对路径: " KEY_PATH
+    echo -e "${RED}未找到默认路径证书，正在进行全盘模糊搜索...${NC}"
+    CERT_PATH=$(find / -name "*$DOMAIN*" -name "fullchain.pem" 2>/dev/null | head -n 1)
+    KEY_PATH=$(find / -name "*$DOMAIN*" -name "privkey.pem" 2>/dev/null | head -n 1)
 fi
 
-# 3. 自动生成 UUID 和 TOKEN (保留回车默认随机生成)
-echo "正在生成安全凭证..."
+# 3. 如果依然未找到，引导申请
+if [ -z "$CERT_PATH" ]; then
+    echo -e "${RED}系统中未找到有效的 SSL 证书！${NC}"
+    read -p "是否尝试使用 Certbot 自动申请一个新证书？(y/n): " APPLY_NEW
+    if [[ "$APPLY_NEW" == "y" ]]; then
+        echo "准备申请证书... (注意：必须停止 Nginx 等占用 80 端口的程序)"
+        apt update && apt install -y certbot
+        certbot certonly --standalone -d "$DOMAIN"
+        CERT_PATH="/etc/letsencrypt/live/$DOMAIN/fullchain.pem"
+        KEY_PATH="/etc/letsencrypt/live/$DOMAIN/privkey.pem"
+    else
+        echo "脚本退出：没有证书无法运行 TUIC。"
+        exit 1
+    fi
+fi
+
+# 4. 生成安全凭证
 UUID=$(cat /proc/sys/kernel/random/uuid)
 TOKEN=$(openssl rand -base64 16)
 
-echo -e "生成 UUID: ${GREEN}$UUID${NC}"
-echo -e "生成 TOKEN: ${GREEN}$TOKEN${NC}"
-
-# 4. 下载服务端程序
-echo "正在安装 TUIC 服务端..."
+# 5. 安装与配置
 mkdir -p /usr/local/bin/tuic /etc/tuic
 wget -O /usr/local/bin/tuic-server https://github.com/EAimTY/tuic/releases/download/tuic-server-1.0.0/tuic-server-1.0.0-x86_64-linux-gnu >/dev/null 2>&1
 chmod +x /usr/local/bin/tuic-server
 
-# 5. 写入配置文件
 cat > /etc/tuic/config.json <<EOF
 {
   "server": "0.0.0.0:4443",
-  "users": {
-    "$UUID": "$TOKEN"
-  },
+  "users": { "$UUID": "$TOKEN" },
   "certificate": "$CERT_PATH",
   "private_key": "$KEY_PATH",
   "congestion_controller": "bbr",
@@ -52,7 +62,6 @@ cat > /etc/tuic/config.json <<EOF
 }
 EOF
 
-# 6. 配置 Systemd 自启
 cat > /etc/systemd/system/tuic.service <<EOF
 [Unit]
 Description=TUIC v5 Server
@@ -71,11 +80,11 @@ systemctl daemon-reload
 systemctl enable tuic
 systemctl restart tuic
 
-# 7. 输出节点信息
+# 6. 输出结果
 IP=$(curl -s4 ifconfig.me)
-echo -e "\n${GREEN}部署成功！请妥善保存以下信息，不要泄露给他人：${NC}"
+echo -e "\n${GREEN}部署成功！${NC}"
 echo "----------------------------------------------------"
 echo "TUIC 链接:"
 echo "tuic://$UUID:$TOKEN@$IP:4443/?sni=$DOMAIN&congestion_control=bbr&packet_loss_prevention=1&alpn=h3"
 echo "----------------------------------------------------"
-echo -e "提示：若晚高峰丢包严重，请修改 /etc/tuic/config.json 中的端口并重启服务。"
+echo "状态检查: systemctl status tuic"

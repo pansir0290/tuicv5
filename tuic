@@ -1,5 +1,4 @@
 #!/bin/bash
-# 强制切换输入源到终端
 exec </dev/tty
 
 # 颜色定义
@@ -7,7 +6,7 @@ GREEN='\033[0;32m'
 RED='\033[0;31m'
 NC='\033[0m'
 
-echo -e "${GREEN}=== TUIC v5 最终自适应部署脚本 ===${NC}"
+echo -e "${GREEN}=== TUIC v5 架构自适应 & 智能申请证书部署脚本 ===${NC}"
 
 # 1. 输入域名
 read -p "请输入你的真实解析域名 (将作为 SNI 使用): " DOMAIN
@@ -16,31 +15,36 @@ if [ -z "$DOMAIN" ]; then
     exit 1
 fi
 
-# 2. 自动探测系统架构并下载对应二进制文件
+# 2. 自动架构检测并下载 (更新 URL 路径)
 ARCH=$(uname -m)
 echo "正在检测架构: $ARCH ..."
 
+# 修正：EAimTY 仓库地址已迁移，现在指向 tuic-protocol
 if [ "$ARCH" == "aarch64" ]; then
-    DOWNLOAD_URL="https://github.com/EAimTY/tuic/releases/download/tuic-server-1.0.0/tuic-server-1.0.0-aarch64-linux-gnu"
+    DOWNLOAD_URL="https://github.com/tuic-protocol/tuic/releases/download/tuic-server-1.0.0/tuic-server-1.0.0-aarch64-linux-gnu"
 else
-    DOWNLOAD_URL="https://github.com/EAimTY/tuic/releases/download/tuic-server-1.0.0/tuic-server-1.0.0-x86_64-linux-gnu"
+    DOWNLOAD_URL="https://github.com/tuic-protocol/tuic/releases/download/tuic-server-1.0.0/tuic-server-1.0.0-x86_64-linux-gnu"
 fi
 
-echo "正在从 $DOWNLOAD_URL 下载..."
+echo "正在下载 TUIC 二进制文件..."
 mkdir -p /usr/local/bin/tuic /etc/tuic
 wget -O /usr/local/bin/tuic-server "$DOWNLOAD_URL"
 chmod +x /usr/local/bin/tuic-server
 
-# 3. 搜索证书
+# 3. 智能查找或申请证书
 CERT_PATH=$(find /root/npm/letsencrypt/live/ -name "fullchain.pem" | grep "$DOMAIN" | head -n 1)
 KEY_PATH=$(find /root/npm/letsencrypt/live/ -name "privkey.pem" | grep "$DOMAIN" | head -n 1)
 
 if [ -z "$CERT_PATH" ]; then
-    echo -e "${RED}未找到证书，请先在 NPM 面板申请证书。${NC}"
-    exit 1
+    echo -e "${RED}未找到已存在的证书，正在自动申请...${NC}"
+    apt update && apt install -y certbot
+    systemctl stop nginx 2>/dev/null
+    certbot certonly --standalone -d "$DOMAIN" --non-interactive --agree-tos -m admin@$DOMAIN
+    CERT_PATH="/etc/letsencrypt/live/$DOMAIN/fullchain.pem"
+    KEY_PATH="/etc/letsencrypt/live/$DOMAIN/privkey.pem"
 fi
 
-# 4. 生成配置 (纯十六进制 Token，避开特殊符号)
+# 4. 生成配置 (纯十六进制 Token)
 UUID=$(cat /proc/sys/kernel/random/uuid)
 TOKEN=$(openssl rand -hex 16)
 
@@ -80,4 +84,3 @@ echo "----------------------------------------------------"
 echo "TUIC 链接:"
 echo "tuic://$UUID:$TOKEN@$IP:4443/?sni=$DOMAIN&congestion_control=bbr&packet_loss_prevention=1&alpn=h3"
 echo "----------------------------------------------------"
-echo "使用提示：如果连接不通，请在防火墙/安全组放行 4443/UDP 端口。"

@@ -1,50 +1,39 @@
 #!/bin/bash
 exec </dev/tty
-
-# 颜色定义
 GREEN='\033[0;32m'
 RED='\033[0;31m'
 NC='\033[0m'
 
-echo -e "${GREEN}=== TUIC v5 架构自适应 & 智能申请证书部署脚本 ===${NC}"
+echo -e "${GREEN}=== TUIC v5 最终标准化一键部署脚本 ===${NC}"
 
-# 1. 输入域名
-read -p "请输入你的真实解析域名 (将作为 SNI 使用): " DOMAIN
-if [ -z "$DOMAIN" ]; then
-    echo -e "${RED}域名不能为空，脚本已终止。${NC}"
+# 1. 输入并校验域名
+read -p "请输入你的真实解析域名 (如 clawless.310889.xyz): " DOMAIN
+if [ -z "$DOMAIN" ]; then echo -e "${RED}域名不能为空。${NC}"; exit 1; fi
+
+# 2. 自动安装依赖并申请证书
+echo -e "${GREEN}正在准备证书环境...${NC}"
+apt update && apt install -y certbot
+# 确保没有东西占用 80 端口，防止申请失败
+fuser -k 80/tcp >/dev/null 2>&1
+
+echo -e "${GREEN}正在申请 SSL 证书...${NC}"
+certbot certonly --standalone -d "$DOMAIN" --non-interactive --agree-tos -m admin@$DOMAIN
+CERT_PATH="/etc/letsencrypt/live/$DOMAIN/fullchain.pem"
+KEY_PATH="/etc/letsencrypt/live/$DOMAIN/privkey.pem"
+
+if [ ! -f "$CERT_PATH" ]; then
+    echo -e "${RED}证书申请失败！请检查域名 $DOMAIN 是否已经正确解析到本服务器 IP。${NC}"
     exit 1
 fi
 
-# 2. 自动架构检测并下载 (更新 URL 路径)
+# 3. 架构自适应下载二进制文件
 ARCH=$(uname -m)
-echo "正在检测架构: $ARCH ..."
+URL="https://github.com/tuic-protocol/tuic/releases/download/tuic-server-1.0.0/tuic-server-1.0.0-${ARCH}-linux-gnu"
+echo -e "${GREEN}正在下载 TUIC 二进制文件 ($ARCH)...${NC}"
+mkdir -p /etc/tuic
+wget -qO /usr/local/bin/tuic-server "$URL" && chmod +x /usr/local/bin/tuic-server
 
-# 修正：EAimTY 仓库地址已迁移，现在指向 tuic-protocol
-if [ "$ARCH" == "aarch64" ]; then
-    DOWNLOAD_URL="https://github.com/tuic-protocol/tuic/releases/download/tuic-server-1.0.0/tuic-server-1.0.0-aarch64-linux-gnu"
-else
-    DOWNLOAD_URL="https://github.com/tuic-protocol/tuic/releases/download/tuic-server-1.0.0/tuic-server-1.0.0-x86_64-linux-gnu"
-fi
-
-echo "正在下载 TUIC 二进制文件..."
-mkdir -p /usr/local/bin/tuic /etc/tuic
-wget -O /usr/local/bin/tuic-server "$DOWNLOAD_URL"
-chmod +x /usr/local/bin/tuic-server
-
-# 3. 智能查找或申请证书
-CERT_PATH=$(find /root/npm/letsencrypt/live/ -name "fullchain.pem" | grep "$DOMAIN" | head -n 1)
-KEY_PATH=$(find /root/npm/letsencrypt/live/ -name "privkey.pem" | grep "$DOMAIN" | head -n 1)
-
-if [ -z "$CERT_PATH" ]; then
-    echo -e "${RED}未找到已存在的证书，正在自动申请...${NC}"
-    apt update && apt install -y certbot
-    systemctl stop nginx 2>/dev/null
-    certbot certonly --standalone -d "$DOMAIN" --non-interactive --agree-tos -m admin@$DOMAIN
-    CERT_PATH="/etc/letsencrypt/live/$DOMAIN/fullchain.pem"
-    KEY_PATH="/etc/letsencrypt/live/$DOMAIN/privkey.pem"
-fi
-
-# 4. 生成配置 (纯十六进制 Token)
+# 4. 生成配置 (纯净的 16 进制 Token)
 UUID=$(cat /proc/sys/kernel/random/uuid)
 TOKEN=$(openssl rand -hex 16)
 
@@ -60,7 +49,7 @@ cat > /etc/tuic/config.json <<EOF
 }
 EOF
 
-# 5. 系统服务
+# 5. 系统服务部署
 cat > /etc/systemd/system/tuic.service <<EOF
 [Unit]
 Description=TUIC v5 Server
@@ -77,10 +66,11 @@ EOF
 
 systemctl daemon-reload && systemctl enable tuic && systemctl restart tuic
 
-# 6. 输出结果
+# 6. 完成结果输出
 IP=$(curl -s4 ifconfig.me)
 echo -e "\n${GREEN}部署成功！${NC}"
 echo "----------------------------------------------------"
 echo "TUIC 链接:"
 echo "tuic://$UUID:$TOKEN@$IP:4443/?sni=$DOMAIN&congestion_control=bbr&packet_loss_prevention=1&alpn=h3"
 echo "----------------------------------------------------"
+echo -e "${RED}重要提示：如果无法连接，请在你的云厂商控制台添加防火墙规则，放行 4443/UDP 端口。${NC}"

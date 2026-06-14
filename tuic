@@ -1,4 +1,5 @@
 #!/bin/bash
+# 强制切换输入源到终端
 exec </dev/tty
 
 # 颜色定义
@@ -6,7 +7,7 @@ GREEN='\033[0;32m'
 RED='\033[0;31m'
 NC='\033[0m'
 
-echo -e "${GREEN}=== TUIC v5 最终部署脚本 (已优化兼容性) ===${NC}"
+echo -e "${GREEN}=== TUIC v5 最终自适应部署脚本 ===${NC}"
 
 # 1. 输入域名
 read -p "请输入你的真实解析域名 (将作为 SNI 使用): " DOMAIN
@@ -15,31 +16,33 @@ if [ -z "$DOMAIN" ]; then
     exit 1
 fi
 
-# 2. 搜索证书 (兼容 NPM)
+# 2. 自动探测系统架构并下载对应二进制文件
+ARCH=$(uname -m)
+echo "正在检测架构: $ARCH ..."
+
+if [ "$ARCH" == "aarch64" ]; then
+    DOWNLOAD_URL="https://github.com/EAimTY/tuic/releases/download/tuic-server-1.0.0/tuic-server-1.0.0-aarch64-linux-gnu"
+else
+    DOWNLOAD_URL="https://github.com/EAimTY/tuic/releases/download/tuic-server-1.0.0/tuic-server-1.0.0-x86_64-linux-gnu"
+fi
+
+echo "正在从 $DOWNLOAD_URL 下载..."
+mkdir -p /usr/local/bin/tuic /etc/tuic
+wget -O /usr/local/bin/tuic-server "$DOWNLOAD_URL"
+chmod +x /usr/local/bin/tuic-server
+
+# 3. 搜索证书
 CERT_PATH=$(find /root/npm/letsencrypt/live/ -name "fullchain.pem" | grep "$DOMAIN" | head -n 1)
 KEY_PATH=$(find /root/npm/letsencrypt/live/ -name "privkey.pem" | grep "$DOMAIN" | head -n 1)
 
-# 3. 未找到证书引导申请
 if [ -z "$CERT_PATH" ]; then
-    read -p "未找到证书，是否申请？(y/n): " APPLY_NEW
-    if [[ "$APPLY_NEW" == "y" ]]; then
-        apt update && apt install -y certbot
-        certbot certonly --standalone -d "$DOMAIN" --non-interactive --agree-tos -m admin@$DOMAIN
-        CERT_PATH="/etc/letsencrypt/live/$DOMAIN/fullchain.pem"
-        KEY_PATH="/etc/letsencrypt/live/$DOMAIN/privkey.pem"
-    else
-        exit 1
-    fi
+    echo -e "${RED}未找到证书，请先在 NPM 面板申请证书。${NC}"
+    exit 1
 fi
 
-# 4. 生成 UUID 和 纯十六进制 TOKEN (无特殊字符)
+# 4. 生成配置 (纯十六进制 Token，避开特殊符号)
 UUID=$(cat /proc/sys/kernel/random/uuid)
 TOKEN=$(openssl rand -hex 16)
-
-# 5. 配置 TUIC
-mkdir -p /usr/local/bin/tuic /etc/tuic
-wget -qO /usr/local/bin/tuic-server https://github.com/EAimTY/tuic/releases/download/tuic-server-1.0.0/tuic-server-1.0.0-x86_64-linux-gnu
-chmod +x /usr/local/bin/tuic-server
 
 cat > /etc/tuic/config.json <<EOF
 {
@@ -53,7 +56,7 @@ cat > /etc/tuic/config.json <<EOF
 }
 EOF
 
-# 6. 系统服务
+# 5. 系统服务
 cat > /etc/systemd/system/tuic.service <<EOF
 [Unit]
 Description=TUIC v5 Server
@@ -68,12 +71,13 @@ RestartSec=3
 WantedBy=multi-user.target
 EOF
 
-systemctl daemon-reload && systemctl restart tuic
+systemctl daemon-reload && systemctl enable tuic && systemctl restart tuic
 
-# 7. 输出结果
+# 6. 输出结果
 IP=$(curl -s4 ifconfig.me)
 echo -e "\n${GREEN}部署成功！${NC}"
 echo "----------------------------------------------------"
 echo "TUIC 链接:"
 echo "tuic://$UUID:$TOKEN@$IP:4443/?sni=$DOMAIN&congestion_control=bbr&packet_loss_prevention=1&alpn=h3"
 echo "----------------------------------------------------"
+echo "使用提示：如果连接不通，请在防火墙/安全组放行 4443/UDP 端口。"

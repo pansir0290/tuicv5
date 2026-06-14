@@ -15,4 +15,4 @@
 1. **登录你的 VPS**，运行以下命令下载并安装：
 
 ```bash
-sudo curl -fsSL [https://raw.githubusercontent.com/pansir0290/nginx-stream-manager/main/deploy.sh](https://raw.githubusercontent.com/pansir0290/tuicv5/main/tuic_install.sh) | bash
+sudo curl -fsSL https://raw.githubusercontent.com/pansir0290/tuicv5/main/tuic_install.sh | bash

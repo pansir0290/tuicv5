@@ -1,0 +1,81 @@
+#!/bin/bash
+
+# 颜色定义
+GREEN='\033[0;32m'
+RED='\033[0;31m'
+NC='\033[0m'
+
+echo -e "${GREEN}=== TUIC v5 一键部署脚本 ===${NC}"
+
+# 1. 自动探测或手动输入域名
+DOMAIN=$(grep -r "serverNames" /usr/local/etc/xray/ 2>/dev/null | grep -oP '(?<=")[^"]+(?=")' | head -n 1)
+if [ -z "$DOMAIN" ]; then
+    read -p "未检测到 Reality 域名，请输入你的伪装域名: " DOMAIN
+fi
+
+# 2. 自动探测或手动输入证书路径
+CERT_PATH=$(find /etc/letsencrypt/live/ -name fullchain.pem 2>/dev/null | head -n 1)
+KEY_PATH=$(find /etc/letsencrypt/live/ -name privkey.pem 2>/dev/null | head -n 1)
+
+if [ -z "$CERT_PATH" ]; then
+    echo -e "${RED}未自动发现证书！${NC}"
+    read -p "请输入 Fullchain.pem 绝对路径: " CERT_PATH
+    read -p "请输入 Privkey.pem 绝对路径: " KEY_PATH
+fi
+
+# 3. 自动生成 UUID 和 TOKEN (保留回车默认随机生成)
+echo "正在生成安全凭证..."
+UUID=$(cat /proc/sys/kernel/random/uuid)
+TOKEN=$(openssl rand -base64 16)
+
+echo -e "生成 UUID: ${GREEN}$UUID${NC}"
+echo -e "生成 TOKEN: ${GREEN}$TOKEN${NC}"
+
+# 4. 下载服务端程序
+echo "正在安装 TUIC 服务端..."
+mkdir -p /usr/local/bin/tuic /etc/tuic
+wget -O /usr/local/bin/tuic-server https://github.com/EAimTY/tuic/releases/download/tuic-server-1.0.0/tuic-server-1.0.0-x86_64-linux-gnu >/dev/null 2>&1
+chmod +x /usr/local/bin/tuic-server
+
+# 5. 写入配置文件
+cat > /etc/tuic/config.json <<EOF
+{
+  "server": "0.0.0.0:4443",
+  "users": {
+    "$UUID": "$TOKEN"
+  },
+  "certificate": "$CERT_PATH",
+  "private_key": "$KEY_PATH",
+  "congestion_controller": "bbr",
+  "alpn": ["h3"],
+  "packet_loss_prevention": true
+}
+EOF
+
+# 6. 配置 Systemd 自启
+cat > /etc/systemd/system/tuic.service <<EOF
+[Unit]
+Description=TUIC v5 Server
+After=network.target
+
+[Service]
+ExecStart=/usr/local/bin/tuic-server -c /etc/tuic/config.json
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+systemctl daemon-reload
+systemctl enable tuic
+systemctl restart tuic
+
+# 7. 输出节点信息
+IP=$(curl -s4 ifconfig.me)
+echo -e "\n${GREEN}部署成功！请妥善保存以下信息，不要泄露给他人：${NC}"
+echo "----------------------------------------------------"
+echo "TUIC 链接:"
+echo "tuic://$UUID:$TOKEN@$IP:4443/?sni=$DOMAIN&congestion_control=bbr&packet_loss_prevention=1&alpn=h3"
+echo "----------------------------------------------------"
+echo -e "提示：若晚高峰丢包严重，请修改 /etc/tuic/config.json 中的端口并重启服务。"

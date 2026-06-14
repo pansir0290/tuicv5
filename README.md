@@ -15,4 +15,4 @@
 1. **登录你的 VPS**，运行以下命令下载并安装：
 
 ```bash
-sudo curl -fsSL https://github.com/pansir0290/tuicv5/blob/main/tuic.sh | bash
+sudo curl -fsSL https://github.com/pansir0290/tuicv5/blob/main/tuic | bash
